@@ -366,14 +366,18 @@ def funil_de_etapas(df_filtrado, df_gasto):
     total_inicio = df_funil.loc[0, 'quantidade'] if df_funil.loc[0, 'quantidade'] > 0 else 1
     df_funil['pct_inicio'] = df_funil['quantidade'] / total_inicio * 100
 
-    # % em relação à etapa anterior
+    # % em relação à etapa anterior (exceto para perda)
     pct_anterior = [None]  # primeira etapa não tem anterior
-    for i in range(1, len(df_funil)):
+    for i in range(1, len(df_funil) - 1):  # Excluímos a última etapa (PERDA)
         anterior = df_funil.loc[i - 1, 'quantidade']
         atual = df_funil.loc[i, 'quantidade']
         pct = (atual / anterior * 100) if anterior > 0 else 0
         pct_anterior.append(pct)
-
+    
+    # A etapa PERDA usa o total (LEAD) como referência
+    pct_perda = (df_funil.loc[4, 'quantidade'] / total_inicio * 100) if total_inicio > 0 else 0
+    pct_anterior.append(pct_perda)
+    
     df_funil['pct_anterior'] = pct_anterior
 
     # Texto visível no gráfico
@@ -381,6 +385,10 @@ def funil_de_etapas(df_filtrado, df_gasto):
         lambda row: f"{row['quantidade']}\n({row['pct_anterior']:.1f}%)" if pd.notna(row['pct_anterior']) else str(row['quantidade']),
         axis=1
     )
+    
+    # Alterando especificamente o texto para PERDA para indicar que é em relação ao total
+    perda_idx = df_funil[df_funil['etapa'] == 'PERDA'].index[0]
+    df_funil.loc[perda_idx, 'texto'] = f"{df_funil.loc[perda_idx, 'quantidade']}\n({df_funil.loc[perda_idx, 'pct_anterior']:.1f}% do total)"
 
     # Criar o gráfico
     fig = px.funnel(
