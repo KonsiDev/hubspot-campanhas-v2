@@ -43,6 +43,8 @@ if arquivos:
 
 if df is not None and df_gasto is not None:
     df_filtrado = df.copy()
+    df_gasto_original = df_gasto.copy()
+    
     st.sidebar.title("Filtros")
 
     def multiselect_com_default(label, opcoes):
@@ -97,7 +99,7 @@ if df is not None and df_gasto is not None:
     # Exibir os KPIs
     aplicar_estilo_kpi()
     colunas = st.columns(6)
-    exibir_kpis(df, df_filtrado, gastos, data_inicio, data_fim, considerar_dias_uteis, colunas)
+    exibir_kpis(df, df_filtrado, gastos, df_gasto_original, data_inicio, data_fim, considerar_dias_uteis, colunas)
 
 
 

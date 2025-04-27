@@ -50,11 +50,15 @@ def formatar_moeda(valor):
         return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 # Exibir um KPI individual
-def mostrar_kpi(coluna, titulo, valor, delta=None, sufixo="", valor_monetario=False):
+def mostrar_kpi(coluna, titulo, valor, delta=None, sufixo="", valor_monetario=False, e_taxa_conversao=False):
     if valor_monetario and isinstance(valor, (float, int)):
         valor_formatado = formatar_moeda(valor)
     else:
-        valor_formatado = f"{valor}{sufixo}" if sufixo else str(valor)
+        # Aplica sufixo "%" apenas se for taxa de conversão ou se o sufixo não for "%"
+        if sufixo == "%" and not e_taxa_conversao:
+            valor_formatado = str(valor)
+        else:
+            valor_formatado = f"{valor}{sufixo}" if sufixo else str(valor)
 
     html = f'<div class="kpi-container"><div class="kpi-title">{titulo}</div><div class="kpi-value">{valor_formatado}</div>'
 
@@ -68,37 +72,148 @@ def mostrar_kpi(coluna, titulo, valor, delta=None, sufixo="", valor_monetario=Fa
     coluna.markdown(html, unsafe_allow_html=True)
 
 # Exibir todos os KPIs
-def exibir_kpis(df, df_filtrado, gastos, data_inicio, data_fim, considerar_dias_uteis, colunas):
+def exibir_kpis(df, df_filtrado, gastos, df_gasto_original, data_inicio, data_fim, considerar_dias_uteis, colunas):
     col1, col2, col3, col4, col5, col6 = colunas
 
-    total_gerado = df.shape[0]
+    # Verificar se um período específico foi selecionado
+    periodo_selecionado = data_inicio != df['data'].min() or data_fim != df['data'].max()
+    
+    # Calcular o período anterior equivalente
+    periodo_atual = (data_fim - data_inicio).days + 1
+    data_fim_anterior = data_inicio - pd.Timedelta(days=1)
+    data_inicio_anterior = data_inicio - pd.Timedelta(days=periodo_atual)
+    
+    # Filtrar dados do período anterior (usando mesmos filtros do período atual)
+    filtros_atuais = {
+        'equipe': df_filtrado['equipe'].unique(),
+        'produto': df_filtrado['produto'].unique(),
+        'convenio_acronimo': df_filtrado['convenio_acronimo'].unique(),
+        'etapa': df_filtrado['etapa'].unique(),
+        'origem': df_filtrado['origem'].unique()
+    }
+    
+    df_periodo_anterior = df[
+        (df['data'] >= data_inicio_anterior) & 
+        (df['data'] <= data_fim_anterior) &
+        df['equipe'].isin(filtros_atuais['equipe']) &
+        df['produto'].isin(filtros_atuais['produto']) &
+        df['convenio_acronimo'].isin(filtros_atuais['convenio_acronimo']) &
+        df['etapa'].isin(filtros_atuais['etapa']) &
+        df['origem'].isin(filtros_atuais['origem'])
+    ]
+    
+    # Aplicar filtro de dias úteis se necessário
+    if considerar_dias_uteis:
+        # Importar a função filtrar_dias_uteis do módulo limpeza
+        from limpeza import filtrar_dias_uteis
+        df_periodo_anterior = filtrar_dias_uteis(df_periodo_anterior, data_inicio_anterior, data_fim_anterior, True)
+    
+    # Total do período anterior
+    total_periodo_anterior = df_periodo_anterior.shape[0]
+    
+    # Dados do período atual
     total_filtrado = df_filtrado.shape[0]
 
     with col1:
-        mostrar_kpi(col1, "Total de Leads Gerados", total_filtrado, False)
+        # Calcular delta do total de leads
+        delta_leads = None
+        if periodo_selecionado and total_periodo_anterior > 0:
+            delta_leads = ((total_filtrado - total_periodo_anterior) / total_periodo_anterior) * 100
+        mostrar_kpi(col1, "Total de Leads Gerados", total_filtrado, delta=delta_leads, sufixo="%")
 
     with col2:
         dias = pd.bdate_range(start=data_inicio, end=data_fim) if considerar_dias_uteis else pd.date_range(start=data_inicio, end=data_fim)
-        media_leads = total_filtrado / len(dias) if len(dias) > 0 else 0
-        mostrar_kpi(col2, "Média de Leads Gerados", round(media_leads, 2))
+        media_leads = int(total_filtrado / len(dias) if len(dias) > 0 else 0)
+        
+        # Média do período anterior
+        dias_anterior = pd.bdate_range(start=data_inicio_anterior, end=data_fim_anterior) if considerar_dias_uteis else pd.date_range(start=data_inicio_anterior, end=data_fim_anterior)
+        media_leads_anterior = total_periodo_anterior / len(dias_anterior) if len(dias_anterior) > 0 else 0
+        
+        # Calcular delta da média
+        delta_media = None
+        if periodo_selecionado and media_leads_anterior > 0:
+            delta_media = ((media_leads - media_leads_anterior) / media_leads_anterior) * 100
+        
+        mostrar_kpi(col2, "Média de Leads Gerados", round(media_leads, 2), delta=delta_media, sufixo="%")
 
     with col3:
-        taxa_geral = df.query('etapa == "PAGO"').shape[0] / total_gerado if total_gerado > 0 else 0
+        # Taxa de conversão atual
         taxa_filtro = df_filtrado.query('etapa == "PAGO"').shape[0] / total_filtrado if total_filtrado > 0 else 0
-        delta_taxa = (taxa_filtro - taxa_geral) * 100
-        mostrar_kpi(col3, "Taxa de Conversão", round(taxa_filtro * 100, 2), delta=delta_taxa, sufixo="%")
+        
+        # Taxa de conversão do período anterior
+        taxa_anterior = df_periodo_anterior.query('etapa == "PAGO"').shape[0] / total_periodo_anterior if total_periodo_anterior > 0 else 0
+        
+        # Calcular delta da taxa
+        delta_taxa = None
+        if periodo_selecionado and taxa_anterior > 0:
+            delta_taxa = ((taxa_filtro - taxa_anterior) / taxa_anterior) * 100
+            
+        mostrar_kpi(col3, "Taxa de Conversão", round(taxa_filtro * 100, 2), delta=delta_taxa, sufixo="%", e_taxa_conversao=True)
 
     with col4:
         valor_gerado = df_filtrado.query('etapa == "PAGO"')['comissao_paga'].sum()
-        mostrar_kpi(col4, "Valor Total Gerado", valor_gerado, valor_monetario=True)
+        
+        # Valor gerado no período anterior
+        valor_anterior = df_periodo_anterior.query('etapa == "PAGO"')['comissao_paga'].sum()
+        
+        # Calcular delta do valor gerado
+        delta_valor = None
+        if periodo_selecionado and valor_anterior > 0:
+            delta_valor = ((valor_gerado - valor_anterior) / valor_anterior) * 100
+            
+        mostrar_kpi(col4, "Valor Total Gerado", valor_gerado, delta=delta_valor, valor_monetario=True, sufixo="%")
 
     with col5:
         valor_gasto = gastos['valor_pago'].sum()
-        mostrar_kpi(col5, "Valor Total Gasto", valor_gasto, valor_monetario=True)
+        valor_gasto_anterior = 0
+        
+        try:
+            if df_gasto_original is not None and not df_gasto_original.empty:
+                # Filtrar gastos do período anterior
+                gastos_periodo_anterior = df_gasto_original[
+                    (df_gasto_original['data'] >= data_inicio_anterior) & 
+                    (df_gasto_original['data'] <= data_fim_anterior)
+                ]
+                
+                # Aplicar os mesmos filtros do período atual
+                gastos_periodo_anterior = gastos_periodo_anterior[
+                    gastos_periodo_anterior['Convênio'].isin(filtros_atuais['convenio_acronimo']) &
+                    gastos_periodo_anterior['Produto'].isin(filtros_atuais['produto']) &
+                    gastos_periodo_anterior['Equipe'].isin(filtros_atuais['equipe']) &
+                    gastos_periodo_anterior['Canal'].isin(filtros_atuais['origem'])
+                ]
+                
+                # Aplicar custos unitários
+                custos_unitarios = {'SMS': 0.048, 'RCS': 0.105, 'HYPERFLOW': 0.047, 'Whatsapp': 0.046}
+                gastos_anterior = gastos_periodo_anterior.groupby(['Equipe', 'Convênio', 'Produto', 'Canal'])['Quantidade'].sum().reset_index()
+                gastos_anterior['valor_pago'] = gastos_anterior['Canal'].map(custos_unitarios) * gastos_anterior['Quantidade']
+                valor_gasto_anterior = gastos_anterior['valor_pago'].sum()
+                
+        except Exception as e:
+            st.write(f"Erro no cálculo: {e}")
+            valor_gasto_anterior = 0
+        
+        # Calcular delta do valor gasto
+        delta_gasto = None
+        if periodo_selecionado and valor_gasto_anterior > 0:
+            delta_gasto = ((valor_gasto - valor_gasto_anterior) / valor_gasto_anterior) * 100
+            
+        mostrar_kpi(col5, "Valor Total Gasto", valor_gasto, delta=delta_gasto, valor_monetario=True, sufixo="%")
 
     with col6:
         lucro = valor_gerado - valor_gasto
-        mostrar_kpi(col6, "Lucro Bruto", lucro, delta=lucro, valor_monetario=True)
+        
+        # Cálculo do lucro do período anterior
+        lucro_anterior = None
+        if periodo_selecionado and valor_anterior is not None and valor_gasto_anterior is not None:
+            lucro_anterior = valor_anterior - valor_gasto_anterior
+            
+        # Cálculo da variação percentual do lucro
+        delta_lucro = None
+        if lucro_anterior is not None and lucro_anterior != 0:
+            delta_lucro = ((lucro - lucro_anterior) / abs(lucro_anterior)) * 100
+            
+        mostrar_kpi(col6, "Lucro Bruto", lucro, delta=delta_lucro, valor_monetario=True, sufixo="%")
 
 # GRAFICO 1 - Gastos por convênio/Produto
 def grafico_gasto_convenio_produto(df_filtrado, df_gasto, top_n=5):
@@ -238,7 +353,7 @@ def funil_de_etapas(df_filtrado, df_gasto):
         'LEAD': df_filtrado['data'].notna().sum(),
         'NEGOCIAÇÃO': df_filtrado['data_negociacao'].notna().sum(),
         'CONTRATAÇÃO': df_filtrado['data_contratacao'].notna().sum(),
-        'PAGO': df_filtrado['data_pago'].notna().sum(),
+        'PAGO': df_filtrado.query('etapa == "PAGO"').shape[0],
         'PERDA': df_filtrado['data_perda'].notna().sum()
     }
 
