@@ -76,8 +76,8 @@ if df is not None and df_gasto is not None:
         (df_gasto['data'] >= data_inicio) & (df_gasto['data'] <= data_fim) &
         (df_gasto['Convênio'].isin(filtros['convenio_acronimo'])) &
         (df_gasto['Produto'].isin(filtros['produto'])) &
-
-        (df_gasto['Equipe'].isin(filtros['equipe']))
+        (df_gasto['Equipe'].isin(filtros['equipe'])) &
+        (df_gasto['Canal'].isin(filtros['origem']))
     ]
 
 
@@ -87,7 +87,7 @@ if df is not None and df_gasto is not None:
     
     custos_unitarios = {'SMS': 0.048, 'RCS': 0.105, 'HYPERFLOW': 0.047, 'Whatsapp': 0.046}
     gastos = (
-        df_gasto.groupby(['Equipe', 'Convênio', 'Produto', 'Canal', ])['Quantidade']
+        df_gasto.groupby(['Equipe', 'Convênio', 'Produto', 'Canal'])['Quantidade']
         .sum()
         .reset_index()
     )
