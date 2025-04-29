@@ -104,7 +104,7 @@ if df is not None and df_gasto is not None:
             
         # Extrair a data da própria tag usando regex
         def extract_date_from_tag(tag):
-            match = re.search(r'_(\d{2})(\d{2})(\d{4})_', str(tag))
+            match = re.search(r'(\d{2})(\d{2})(\d{4})', str(tag)) 
             if match:
                 dia, mes, ano = match.groups()
                 try:
@@ -112,6 +112,7 @@ if df is not None and df_gasto is not None:
                 except:
                     return None
             return None
+
         
         # Adicionar coluna com a data extraída da tag
         df_gasto_tag['data_da_tag'] = df_gasto_tag['Tag'].apply(extract_date_from_tag)
@@ -155,6 +156,7 @@ if df is not None and df_gasto is not None:
                     if code in team_code:
                         return team
             return None
+
         
         # Aplicar a extração de equipe
         df_gasto_tag['equipe_da_tag'] = df_gasto_tag['Tag'].apply(extract_team)
