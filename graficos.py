@@ -45,9 +45,13 @@ def aplicar_estilo_kpi():
 # Formatar moeda
 def formatar_moeda(valor):
     try:
-        return locale.currency(valor, grouping=True)
+        # Revisar
+        if isinstance(valor, str):
+            valor = valor.replace('R$', '').strip()
+            valor = valor.replace('.', '').replace(',', '')
+        return float(valor)
     except:
-        return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return 0.0 
 
 # Exibir um KPI individual
 def mostrar_kpi(coluna, titulo, valor, delta=None, sufixo="", valor_monetario=False, e_taxa_conversao=False):
@@ -216,27 +220,146 @@ def exibir_kpis(df, df_filtrado, gastos, df_gasto_original, data_inicio, data_fi
         mostrar_kpi(col6, "Lucro Bruto", lucro, delta=delta_lucro, valor_monetario=True, sufixo="%")
 
 # GRAFICO 1 - Gastos por convênio/Produto
-def grafico_gasto_convenio_produto(df_filtrado, df_gasto, top_n=5):
+def grafico_gasto_convenio_produto(df_filtrado, df_gasto, top_n=5, df_gasto_tag=None, analisar_campanha=False, filtros=None, data_inicio=None, data_fim=None):
     df_pago = df_filtrado[df_filtrado['etapa'] == 'PAGO']
 
-    gasto_convenios = df_gasto.groupby(['Convênio', 'Produto'])['Valor Gasto'].sum().reset_index(name='gasto_total') # Quanto gastou de cada convenio-produto
-    gerado_convenios = df_pago.groupby(['convenio_acronimo', 'produto'])['comissao_paga'].sum().reset_index(name='comissao_paga') # Quanto pagou de cada convenio-produto
+    if analisar_campanha and df_gasto_tag is not None:
+        # Opção para aplicar ou não os filtros
+        col1, col2 = st.columns(2)
+        with col1:
+            aplicar_filtro_equipe = st.checkbox("Aplicar filtro de equipe", value=True, key="filtro_equipe_gasto") # Redundante. Mapear dependências para remover
+        with col2:
+            incluir_fora_periodo = st.checkbox("Incluir tags fora do período", value=False, key="incluir_fora_periodo_gasto")
+        
+        # Criar cópia de trabalho para não alterar o original
+        df_gasto_tag_work = df_gasto_tag.copy()
+        
+        
+        
+        # Garantir que valoers na coluna 'Custo Convertido' sejam numéricos
+        if 'Custo Convertido' in df_gasto_tag_work.columns:
+            # Remover possíveis caracteres não numéricos e converter vírgula para ponto (revisar essa conversão)
+            df_gasto_tag_work['Custo Convertido'] = df_gasto_tag_work['Custo Convertido'].astype(str)
+            df_gasto_tag_work['Custo Convertido'] = df_gasto_tag_work['Custo Convertido'].str.replace(',', '.').str.replace('R$', '').str.strip()
+            df_gasto_tag_work['Custo Convertido'] = pd.to_numeric(df_gasto_tag_work['Custo Convertido'], errors='coerce').fillna(0)
+            
+        
+        # Aplicar os filtros conforme as opções selecionadas
+        if aplicar_filtro_equipe and 'equipe_da_tag' in df_gasto_tag_work.columns and filtros is not None:            
+            # Filtrar
+            df_gasto_tag_filtered = df_gasto_tag_work[df_gasto_tag_work['equipe_da_tag'].isin(filtros['equipe'])]
+            
+            # Se o filtro deixou o dataframe vazio, não aplicar
+            if not df_gasto_tag_filtered.empty:
+                df_gasto_tag_work = df_gasto_tag_filtered
+        
+        if not incluir_fora_periodo and 'data_da_tag' in df_gasto_tag_work.columns and data_inicio is not None and data_fim is not None:
+            
+            # Filtrar
+            df_gasto_tag_filtered = df_gasto_tag_work[
+                (df_gasto_tag_work['data_da_tag'] >= data_inicio) & 
+                (df_gasto_tag_work['data_da_tag'] <= data_fim)
+            ]
+            
+            # Se o filtro deixou o dataframe vazio, não aplicar
+            if not df_gasto_tag_filtered.empty:
+                df_gasto_tag_work = df_gasto_tag_filtered
+        
+        # Verificar se df_gasto_tag ainda tem dados após os filtros
+        if df_gasto_tag_work.empty:
+            st.warning("O arquivo de campanhas não tem dados após a aplicação dos filtros. Experimente desmarcar algumas opções de filtro.")
+            # Usar dados originais como fallback, sem filtros
+            df_gasto_tag_work = df_gasto_tag.copy()
+            
+            # Garantir que Custo Convertido seja numérico
+            if 'Custo Convertido' in df_gasto_tag_work.columns:
+                df_gasto_tag_work['Custo Convertido'] = df_gasto_tag_work['Custo Convertido'].astype(str)
+                df_gasto_tag_work['Custo Convertido'] = df_gasto_tag_work['Custo Convertido'].str.replace(',', '.').str.replace('R$', '').str.strip()
+                df_gasto_tag_work['Custo Convertido'] = pd.to_numeric(df_gasto_tag_work['Custo Convertido'], errors='coerce').fillna(0)
+        
+            
+        # Pegar só dados de custo
+        gasto_convenios = df_gasto_tag_work.groupby(['Tag'])['Custo Convertido'].sum().reset_index(name='gasto_total')
 
-    gasto_convenios.rename(columns={
-        'Convênio': 'convenio_acronimo',
-        'Produto': 'produto',
-    }, inplace=True)
+        
+        # Para comissões, pegamos do df_pago
+        df_pago_work = df_pago.copy()
+        
+        # Aplicar os mesmos filtros para df_pago
+        if aplicar_filtro_equipe and 'equipe_da_tag' in df_pago_work.columns and filtros is not None:
+            df_pago_filtered = df_pago_work[df_pago_work['equipe_da_tag'].isin(filtros['equipe'])]
+            if not df_pago_filtered.empty:
+                df_pago_work = df_pago_filtered
+        
+        if not incluir_fora_periodo and 'data_da_tag' in df_pago_work.columns and data_inicio is not None and data_fim is not None:
+            df_pago_filtered = df_pago_work[
+                (df_pago_work['data_da_tag'] >= data_inicio) & 
+                (df_pago_work['data_da_tag'] <= data_fim)
+            ]
+            if not df_pago_filtered.empty:
+                df_pago_work = df_pago_filtered
+        
+        gerado_convenios = df_pago_work.groupby(['tag_campanha'])['comissao_paga'].sum().reset_index(name='comissao_paga')
+        
+        # Renomear coluna para compatibilidade com o merge (correspondência exata)
+        gasto_convenios.rename(columns={'Tag': 'tag_campanha'}, inplace=True)
+        
+        # Mesclagem com correspondência exata
+        convenios_completo = pd.merge(
+            gasto_convenios,
+            gerado_convenios,
+            on='tag_campanha',
+            how='outer'
+        ).fillna(0)
+        
+        # Ordenar e limitar ao top_n
+        convenios_completo = convenios_completo.sort_values(by='gasto_total', ascending=False).head(top_n)
+        
+        # IMPORTANTE: Garantir que o eixo Y mostre as tags
+        convenios_completo['conv_prod'] = convenios_completo['tag_campanha']
+    else:
+        
+        # Garante que as colunas existem antes de agrupar/renomear
+        if 'Convênio' in df_gasto.columns and 'Produto' in df_gasto.columns and 'Valor Gasto' in df_gasto.columns:
+            gasto_convenios = df_gasto.groupby(['Convênio', 'Produto'])['Valor Gasto'].sum().reset_index(name='gasto_total')
+        else:
+            st.error("Colunas necessárias não encontradas em df_gasto.")
+            return go.Figure()
+        
+        if 'convenio_acronimo' in df_pago.columns and 'produto' in df_pago.columns and 'comissao_paga' in df_pago.columns:
+            gerado_convenios = df_pago.groupby(['convenio_acronimo', 'produto'])['comissao_paga'].sum().reset_index(name='comissao_paga')
+        else:
+            st.error("Colunas necessárias não encontradas em df_pago.")
+            return go.Figure()
 
-    convenios_completo = pd.merge(
-        gasto_convenios,
-        gerado_convenios,
-        on=['convenio_acronimo', 'produto'],
-        how='outer'
-    ).fillna(0)
+        gasto_convenios.rename(columns={
+            'Convênio': 'convenio_acronimo',
+            'Produto': 'produto',
+        }, inplace=True)
 
-    convenios_completo = convenios_completo.sort_values(by='comissao_paga', ascending=False).head(top_n)
-    convenios_completo['conv_prod'] = convenios_completo['convenio_acronimo'] + ' - ' + convenios_completo['produto']
+        # Só faz o merge se as colunas existirem
+        if 'convenio_acronimo' in gasto_convenios.columns and 'convenio_acronimo' in gerado_convenios.columns:
+            convenios_completo = pd.merge(
+                gasto_convenios,
+                gerado_convenios,
+                on=['convenio_acronimo', 'produto'],
+                how='outer'
+            ).fillna(0)
+        else:
+            st.error("Colunas 'convenio_acronimo' ou 'produto' não encontradas para o merge.")
+            return go.Figure()
 
+        convenios_completo = convenios_completo.sort_values(by='comissao_paga', ascending=False).head(top_n)
+        convenios_completo['conv_prod'] = convenios_completo['convenio_acronimo'] + ' - ' + convenios_completo['produto']
+
+    # Verificar se convenios_completo foi definido e tem dados
+    if 'convenios_completo' not in locals() or convenios_completo.empty:
+        st.error("Não há dados disponíveis para gerar o gráfico")
+        fig = go.Figure()
+        fig.update_layout(title="Sem dados disponíveis")
+        return fig
+
+    # Transformação dos dados para plotagem
     df_long = pd.melt(
         convenios_completo,
         id_vars='conv_prod',
@@ -245,14 +368,19 @@ def grafico_gasto_convenio_produto(df_filtrado, df_gasto, top_n=5):
         value_name='Valor'
     )
 
+    # Título baseado no tipo de análise
+    titulo = "Gasto e Comissão por Campanha" if analisar_campanha else "Gasto e Comissão por Convênio-Produto"
+    y_label = "Campanha" if analisar_campanha else "Convênio - Produto"
+
     fig = px.bar(
         df_long,
         x='Valor',
         y='conv_prod',
         color='Tipo',
         barmode='group',
-        labels={'conv_prod': 'Convênio - Produto', 'Valor': 'Valor (R$)', 'Tipo': 'Tipo de Valor'},
-        text='Valor'
+        labels={'conv_prod': y_label, 'Valor': 'Valor (R$)', 'Tipo': 'Tipo de Valor'},
+        text='Valor',
+        title=titulo
     )
 
     fig.update_traces(
@@ -524,40 +652,120 @@ def cohort_dinamico(df_filtrado, df_gasto=None):
 
 
 # GRAFICO 5: CPL
-def cpl_convenios_produto(df_filtrado, df_gasto=None, top_n=5, maiores=True):
-    gasto_convenios = df_gasto.groupby(['Convênio', 'Produto'])['Valor Gasto'].sum().reset_index(name='gasto_total')
-    clientes_convenio = df_filtrado.groupby(['convenio_acronimo', 'produto']).size().reset_index(name='clientes')
+def cpl_convenios_produto(df_filtrado, df_gasto=None, top_n=5, maiores=True, df_gasto_tag=None, analisar_campanha=False, filtros=None, data_inicio=None, data_fim=None):
+    if analisar_campanha and df_gasto_tag is not None:
+        # Opção para aplicar ou não os filtros
+        col1, col2 = st.columns(2)
+        with col2:
+            incluir_fora_periodo = st.checkbox("Incluir tags fora do período", value=False, key="incluir_fora_periodo_cpl")
+        
+        # Criar cópia de trabalho
+        df_gasto_tag_work = df_gasto_tag.copy()
+        df_filtrado_work = df_filtrado.copy()
+        
+        if not incluir_fora_periodo and 'data_da_tag' in df_gasto_tag_work.columns and data_inicio is not None and data_fim is not None:
+            df_gasto_tag_work = df_gasto_tag_work[
+                (df_gasto_tag_work['data_da_tag'] >= data_inicio) & 
+                (df_gasto_tag_work['data_da_tag'] <= data_fim)
+            ]
+        
+        # Verificar se ainda temos dados
+        if df_gasto_tag_work.empty:
+            st.warning("O arquivo de campanhas não tem dados após a aplicação dos filtros. Experimente desmarcar algumas opções de filtro.")
+            # Usar todos os dados como fallback
+            df_gasto_tag_work = df_gasto_tag.copy()
+        
+        
+        
+        if not incluir_fora_periodo and 'data_da_tag' in df_filtrado_work.columns and data_inicio is not None and data_fim is not None:
+            df_filtrado_work = df_filtrado_work[
+                (df_filtrado_work['data_da_tag'] >= data_inicio) & 
+                (df_filtrado_work['data_da_tag'] <= data_fim)
+            ]
+        
+        # Análise por campanha
+        gasto_campanhas = df_gasto_tag_work.groupby(['Tag'])['Custo Convertido'].sum().reset_index(name='gasto_total')
+        clientes_campanha = df_filtrado_work.groupby(['tag_campanha']).size().reset_index(name='clientes')
+        
+        # Renomear para correspondência exata
+        gasto_campanhas.rename(columns={'Tag': 'tag_campanha'}, inplace=True)
+        
+        # Mesclagem exata
+        campanhas_cpl = pd.merge(
+            gasto_campanhas,
+            clientes_campanha,
+            on='tag_campanha',
+            how='left'
+        )
+        
+        # Tratar NaNs
+        campanhas_cpl['clientes'] = campanhas_cpl['clientes'].fillna(1)  # Usar 1 como mínimo para evitar divisão por zero
+        
+        # Calcular CPL
+        campanhas_cpl['CPL'] = campanhas_cpl['gasto_total'] / campanhas_cpl['clientes']
+        
+        # Remove CPLs zero ou negativos
+        campanhas_cpl = campanhas_cpl[campanhas_cpl['CPL'] > 0]
+        
+        # Ordenar e limitar
+        campanhas_cpl = campanhas_cpl.sort_values(by='CPL', ascending=not maiores).head(top_n)
+        
+        # Preparar para exibição - IMPORTANTE: usar tag_campanha para o eixo Y
+        df_cpl = campanhas_cpl
+        df_cpl['identificador'] = df_cpl['tag_campanha']
+            
+        titulo = "CPL por Campanha"
+        y_label = "Campanha"
+    else:
+        # Análise original por Convênio/Produto
+        gasto_convenios = df_gasto.groupby(['Convênio', 'Produto'])['Valor Gasto'].sum().reset_index(name='gasto_total')
+        clientes_convenio = df_filtrado.groupby(['convenio_acronimo', 'produto']).size().reset_index(name='clientes')
 
-    gasto_convenios.rename(columns={
-        'Convênio': 'convenio_acronimo',
-        'Produto': 'produto',
-    }, inplace=True)
+        gasto_convenios.rename(columns={
+            'Convênio': 'convenio_acronimo',
+            'Produto': 'produto',
+        }, inplace=True)
 
-    convenios_cac = pd.merge(
-        gasto_convenios,
-        clientes_convenio,
-        on=['convenio_acronimo', 'produto'],
-        how='outer'
-    )
+        convenios_cac = pd.merge(
+            gasto_convenios,
+            clientes_convenio,
+            on=['convenio_acronimo', 'produto'],
+            how='outer'
+        )
 
-    convenios_cac[['gasto_total', 'clientes']] = convenios_cac[['gasto_total', 'clientes']].fillna(0)
-    convenios_cac = convenios_cac[convenios_cac['clientes'] > 0]
+        convenios_cac[['gasto_total', 'clientes']] = convenios_cac[['gasto_total', 'clientes']].fillna(0)
+        convenios_cac = convenios_cac[convenios_cac['clientes'] > 0]
 
-    convenios_cac['CPL'] = convenios_cac['gasto_total'] / convenios_cac['clientes']
+        convenios_cac['CPL'] = convenios_cac['gasto_total'] / convenios_cac['clientes']
 
-    # ❌ Remove CPLs zero ou negativos
-    convenios_cac = convenios_cac[convenios_cac['CPL'] > 0]
+            # Remove CPLs zero ou negativos
+        convenios_cac = convenios_cac[convenios_cac['CPL'] > 0]
 
-    convenios_cac = convenios_cac.sort_values(by='CPL', ascending=not maiores).head(top_n)
-    convenios_cac['conv_prod'] = convenios_cac['convenio_acronimo'] + ' - ' + convenios_cac['produto']
+        convenios_cac = convenios_cac.sort_values(by='CPL', ascending=not maiores).head(top_n)
+        convenios_cac['identificador'] = convenios_cac['convenio_acronimo'] + ' - ' + convenios_cac['produto']
+            
+        df_cpl = convenios_cac
+        titulo = "CPL por Convênio e Produto"
+        y_label = "Convênio - Produto"
+
+        # Verificar se temos dados
+        if 'df_cpl' not in locals() or df_cpl.empty:
+            st.error("Não há dados para exibir o CPL")
+            fig = go.Figure()
+            fig.update_layout(
+                title="Sem dados disponíveis para exibição de CPL",
+                height=400
+            )
+            return fig
 
     fig = px.bar(
-        convenios_cac,
+        df_cpl,
         x='CPL',
-        y='conv_prod',
+        y='identificador',
         orientation='h',
         text='CPL',
-        labels={'CPL': 'CPL (R$)', 'conv_prod': 'Convênio - Produto'}
+        labels={'CPL': 'CPL (R$)', 'identificador': y_label},
+        title=titulo
     )
 
     fig.update_traces(
@@ -566,7 +774,6 @@ def cpl_convenios_produto(df_filtrado, df_gasto=None, top_n=5, maiores=True):
     )
 
     fig.update_layout(
-        title="CPL por Convênio e Produto",
         height=600,
         xaxis_title="CPL (R$)",
         yaxis_title="",
